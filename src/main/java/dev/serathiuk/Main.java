@@ -16,17 +16,21 @@ import java.net.http.HttpTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.function.Consumer;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 public class Main {
 
     private static final Logger LOGGER = Logger.getLogger(Main.class.getName());
 
     private static final ReentrantLock LOCK = new ReentrantLock();
+
+    private static final  ObjectMapper objectMapper = new ObjectMapper();
 
     public static void main(String[] args) throws IOException {
         var properties = new Properties();
@@ -35,52 +39,27 @@ public class Main {
         var path = Path.of(properties.get("app.files.path").toString());
         var key = properties.get("instances.social.key").toString();
 
+        System.out.println("Path: "+path);
+        System.out.println("Key: "+key);
 
         Files.createDirectories(path);
-        Files.deleteIfExists(path.resolve("instances.csv"));
-        Files.deleteIfExists(path.resolve("languages.csv"));
-        Files.deleteIfExists(path.resolve("prohibited_content.csv"));
-        Files.deleteIfExists(path.resolve("categories.csv"));
-        Files.deleteIfExists(path.resolve("blocks.csv"));
+        Files.deleteIfExists(path.resolve("full_data.csv"));
 
         var swInstance = new StringWriter();
-        var swLanguages = new StringWriter();
-        var swProhibitedContent = new StringWriter();
-        var swCategories = new StringWriter();
-        var swBlocks = new StringWriter();
 
         var csvInstances = CSVFormat.DEFAULT.builder()
-                .setHeader("instance", "added_at", "updated_at", "checked_at", "uptime", "up", "dead", "version", "ipv6",
+                .setHeader("instance", "added_at", "updated_at", "checked_at", "uptimwe", "up", "dead", "version", "ipv6",
                         "https_score", "https_rank", "obs_score", "obs_rank", "users", "statuses", "connections", "open_registrations",
-                        "topic")
+                        "topic", "up", "dead", "language", "prohibited_content", "category", "moderated_domain", "moderation_severitiy", "moderation_comment")
                 .build();
 
-        var csvLanguages = CSVFormat.DEFAULT.builder()
-                .setHeader("instance", "language")
-                .build();
-
-        var csvProhibitedContent = CSVFormat.DEFAULT.builder()
-                .setHeader("instance", "prohibited_content")
-                .build();
-
-        var csvCategories = CSVFormat.DEFAULT.builder()
-                .setHeader("instance", "category")
-                .build();
-
-        var csvBlocks = CSVFormat.DEFAULT.builder()
-                .setHeader("instance", "domain", "severity", "comment")
-                .build();
-
+        var instancesList = new ArrayList<Instance>();
         try(final var httpClient = HttpClient.newHttpClient();
-            final var printerInstances = new CSVPrinter(swInstance, csvInstances);
-            final var printerLanguages = new CSVPrinter(swLanguages, csvLanguages);
-            final var printerProhibitedContent = new CSVPrinter(swProhibitedContent, csvProhibitedContent);
-            final var printerCategories = new CSVPrinter(swCategories, csvCategories);
-            final var printerBlocks = new CSVPrinter(swBlocks, csvBlocks)) {
+            final var printerInstances = new CSVPrinter(swInstance, csvInstances)) {
 
             String nextId = null;
             do {
-                String url = "https://instances.social/api/1.0/instances/list?include_closed=false&include_dead=false&count=1000";
+                String url = "https://instances.social/api/1.0/instances/list?include_closed=true&include_dead=true&count=1000";
 
                 if(nextId != null && !nextId.isEmpty()) {
                     url += "&min_id=" + nextId;
@@ -96,41 +75,54 @@ public class Main {
 
                 var response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 
-                ObjectMapper objectMapper = new ObjectMapper();
                 var instances = objectMapper.readValue(response.body(), Instances.class);
+                instancesList.addAll(instances.getInstances());
 
-                LOGGER.info("Writing CSV files...");
-                writeCSV(instances.getInstances(), printerInstances, printerLanguages, printerProhibitedContent, printerCategories);
 
-                LOGGER.info("Searching blocks...");
-                instances.getInstances()
-                        .parallelStream()
-                        .forEach(proccessInstanceData(httpClient, objectMapper, printerBlocks));
 
                 nextId = instances.getPagination().getNextId();
             } while (nextId != null && !nextId.isEmpty());
+
+            LOGGER.info("Writing CSV files...");
+            writeCSV(instancesList, httpClient, printerInstances);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
 
-
         LOGGER.info("Writing CSV files...");
-        Files.write(path.resolve("instances.csv"), swInstance.toString().getBytes());
-        Files.write(path.resolve("languages.csv"), swLanguages.toString().getBytes());
-        Files.write(path.resolve("prohibited_content.csv"), swProhibitedContent.toString().getBytes());
-        Files.write(path.resolve("categories.csv"), swCategories.toString().getBytes());
-        Files.write(path.resolve("blocks.csv"), swBlocks.toString().getBytes());
+        Files.write(path.resolve("full_data.csv"), swInstance.toString().getBytes());
     }
 
-    private static Consumer<Instance> proccessInstanceData(HttpClient httpClient, ObjectMapper objectMapper, CSVPrinter printer) {
-        return instance -> {
+    private static void writeCSV(List<Instance> instances, HttpClient httpClient, CSVPrinter printerInstances) throws IOException {
+        LOGGER.info("Printing instances...");
+
+        Map<String, Instance> mapInstances = instances.parallelStream()
+                        .collect(Collectors.toMap(Instance::getName, instance -> instance));
+
+        instances.parallelStream().forEach(instance -> {
+
+            try {
+                processInstance(printerInstances, instance, httpClient, mapInstances);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
+    }
+
+    private static void processInstance(CSVPrinter printerInstances, Instance instance, HttpClient httpClient, Map<String, Instance> mapInstances) throws IOException {
+        var languages = instance.getInfo().getLanguages() != null ? instance.getInfo().getLanguages() : List.of("unknown");
+        var prohibitedContents = instance.getInfo().getProhibitedContent() != null ? instance.getInfo().getProhibitedContent() : List.of("unknown");
+        var categories = instance.getInfo().getCategories() != null ? instance.getInfo().getCategories() : List.of("unknown");
+        List<DomainModeration> domainsModeration = List.of();
+
+        if(!instance.isDead() && instance.isUp()) {
             try {
                 LOGGER.info("Searching blocks for " + instance.getName());
 
                 var req = HttpRequest.newBuilder()
                         .uri(new URI("https://" + instance.getName() + "/api/v1/instance/domain_blocks"))
                         .GET()
-                        .timeout(Duration.ofSeconds(5))
+                        .timeout(Duration.ofSeconds(3))
                         .build();
 
                 var response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
@@ -140,19 +132,16 @@ public class Main {
                     return;
                 }
 
-                LOCK.lock();
                 try {
-                    List<DomainModeration> domainsModeration = objectMapper.readValue(response.body(), new TypeReference<List<DomainModeration>>() {
-                    });
-                    for (var domainModeration : domainsModeration) {
-                        printer.printRecord(instance.getName(), domainModeration.getDomain(), domainModeration.getSeverity(), domainModeration.getComment());
-                    }
-                }catch (Exception e) {
+                    domainsModeration = objectMapper.readValue(response.body(), new TypeReference<List<DomainModeration>>() {})
+                            .stream()
+                            .filter(domainModeration -> mapInstances.containsKey(domainModeration.getDomain()))
+                            .collect(Collectors.toList());
+
+                } catch (Exception e) {
                     LOGGER.severe("Error processing blocks for " + instance.getName());
-                    LOGGER.severe("Response: "+response.body());
+                    LOGGER.severe("Response: " + response.body());
                     e.printStackTrace();
-                } finally {
-                    LOCK.unlock();
                 }
             } catch (ConnectException e) {
                 LOGGER.warning("Connection Refused: " + instance.getName());
@@ -162,31 +151,35 @@ public class Main {
                 LOGGER.severe("Error fetching blocks for " + instance.getName());
                 e.printStackTrace();
             }
-        };
-    }
+        }
 
-    private static void writeCSV(List<Instance> instances, CSVPrinter printerInstances, CSVPrinter printerLanguages, CSVPrinter printerProhibitedContent, CSVPrinter printerCategories) throws IOException {
-        LOGGER.info("Printing instances...");
-        for (var instance : instances) {
-            printerInstances.printRecord(instance.getName(), instance.getAddedAt(), instance.getUpdatedAt(), instance.getCheckedAt(),
-                    instance.getUptime(), instance.isUp(), instance.isDead(), instance.getVersion(), instance.isIpv6(), instance.getHttpsScore(),
-                    instance.getHttpsRank(), instance.getObsScore(), instance.getObsRank(), instance.getUsers(), instance.getStatuses(),
-                    instance.getConnections(), instance.isOpenRegistrations(), instance.getInfo().getTopic());
+        if(domainsModeration.isEmpty()) {
+            var domain = new DomainModeration();
+            domain.setDomain("none");
+            domain.setSeverity("unknown");
+            domain.setComment("none");
+            domain.setSeverity_ex("unknown");
+            domainsModeration = List.of(domain);
+        }
 
-            LOGGER.info("Printing languages for "+instance.getName());
-            for(var language : instance.getInfo().getLanguages()) {
-                printerLanguages.printRecord(instance.getName(), language);
+        LOCK.lock();
+        try {
+            for (var language : languages) {
+                for (var prohibitedContent : prohibitedContents) {
+                    for (var category : categories) {
+                        for (var domainModeration : domainsModeration) {
+                            printerInstances.printRecord(instance.getName(), instance.getAddedAt(), instance.getUpdatedAt(), instance.getCheckedAt(),
+                                    instance.getUptime(), instance.isUp(), instance.isDead(), instance.getVersion(), instance.isIpv6(), instance.getHttpsScore(),
+                                    instance.getHttpsRank(), instance.getObsScore(), instance.getObsRank(), instance.getUsers(), instance.getStatuses(),
+                                    instance.getConnections(), instance.isOpenRegistrations(), instance.getInfo().getTopic(), instance.isUp(),
+                                    instance.isDead(), language, prohibitedContent, category,
+                                    domainModeration.getDomain(), domainModeration.getSeverity(), domainModeration.getComment());
+                        }
+                    }
+                }
             }
-
-            LOGGER.info("Printing prohibited content for "+instance.getName());
-            for(var prohibitedContent : instance.getInfo().getProhibitedContent()) {
-                printerProhibitedContent.printRecord(instance.getName(), prohibitedContent);
-            }
-
-            LOGGER.info("Printing categories for "+instance.getName());
-            for(var category : instance.getInfo().getCategories()) {
-                printerCategories.printRecord(instance.getName(), category);
-            }
+        } finally {
+            LOCK.unlock();
         }
     }
 }
