@@ -1,5 +1,6 @@
 package dev.serathiuk;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.csv.CSVFormat;
@@ -20,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -31,6 +33,8 @@ public class Main {
     private static final ReentrantLock LOCK = new ReentrantLock();
 
     private static final  ObjectMapper objectMapper = new ObjectMapper();
+
+    private static AtomicInteger counter = new AtomicInteger(0);
 
     public static void main(String[] args) throws IOException {
         var properties = new Properties();
@@ -54,12 +58,39 @@ public class Main {
                 .build();
 
         var instancesList = new ArrayList<Instance>();
+
+        var threads = new Instance();
+        threads.setId("1111111");
+        threads.setName("threads.net");
+        threads.setUp(true);
+        threads.setDead(false);
+        threads.setOpenRegistrations(true);
+        threads.setHttpsScore(100);
+        threads.setHttpsRank("A+");
+        threads.setObsScore(100);
+        threads.setObsRank("A+");
+        threads.setUsers("200000000");
+        threads.setStatuses("200000000");
+        threads.setConnections("200000000");
+        threads.setVersion("1.0.0");
+
+        var info = new Info();
+        info.setLanguages(List.of("en", "pt", "es"));
+        info.setFederatesWith("all");
+        info.setCategories(List.of("general", "social", "tech"));
+        info.setProhibitedContent(List.of("nudity", "violence", "hate speech"));
+        info.setTopic("General discussion");
+        info.setFullDescription("Threads is a general discussion instance.");
+        info.setShortDescription("General discussion instance.");
+        threads.setInfo(info);
+        instancesList.add(threads);
+
         try(final var httpClient = HttpClient.newHttpClient();
             final var printerInstances = new CSVPrinter(swInstance, csvInstances)) {
 
             String nextId = null;
             do {
-                String url = "https://instances.social/api/1.0/instances/list?include_closed=true&include_dead=true&count=1000";
+                String url = "https://instances.social/api/1.0/instances/list?include_closed=true&include_dead=true&min_users=1&count=5000";
 
                 if(nextId != null && !nextId.isEmpty()) {
                     url += "&min_id=" + nextId;
@@ -84,7 +115,7 @@ public class Main {
             } while (nextId != null && !nextId.isEmpty());
 
             LOGGER.info("Writing CSV files...");
-            writeCSV(instancesList, httpClient, printerInstances);
+            writeCSV(instancesList, printerInstances);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -93,7 +124,7 @@ public class Main {
         Files.write(path.resolve("full_data.csv"), swInstance.toString().getBytes());
     }
 
-    private static void writeCSV(List<Instance> instances, HttpClient httpClient, CSVPrinter printerInstances) throws IOException {
+    private static void writeCSV(List<Instance> instances, CSVPrinter printerInstances) throws IOException {
         LOGGER.info("Printing instances...");
 
         Map<String, Instance> mapInstances = instances.parallelStream()
@@ -102,22 +133,28 @@ public class Main {
         instances.parallelStream().forEach(instance -> {
 
             try {
-                processInstance(printerInstances, instance, httpClient, mapInstances);
+                processInstance(printerInstances, instance, mapInstances);
             } catch (IOException e) {
                 e.printStackTrace();
             }
         });
     }
 
-    private static void processInstance(CSVPrinter printerInstances, Instance instance, HttpClient httpClient, Map<String, Instance> mapInstances) throws IOException {
+    private static void processInstance(CSVPrinter printerInstances, Instance instance, Map<String, Instance> mapInstances) throws IOException {
         var languages = instance.getInfo().getLanguages() != null ? instance.getInfo().getLanguages() : List.of("unknown");
         var prohibitedContents = instance.getInfo().getProhibitedContent() != null ? instance.getInfo().getProhibitedContent() : List.of("unknown");
         var categories = instance.getInfo().getCategories() != null ? instance.getInfo().getCategories() : List.of("unknown");
         List<DomainModeration> domainsModeration = List.of();
 
+        var number = counter.incrementAndGet();
+        if(number % 1000 == 0) {
+            System.out.println("Running GC...");
+            System.gc();
+        }
+
         if(!instance.isDead() && instance.isUp()) {
-            try {
-                LOGGER.info("Searching blocks for " + instance.getName());
+            try (final var httpClient = HttpClient.newHttpClient();) {
+                LOGGER.info(number+ "/"+mapInstances.size()+" - Searching blocks for " + instance.getName());
 
                 var req = HttpRequest.newBuilder()
                         .uri(new URI("https://" + instance.getName() + "/api/v1/instance/domain_blocks"))
@@ -133,11 +170,7 @@ public class Main {
                 }
 
                 try {
-                    domainsModeration = objectMapper.readValue(response.body(), new TypeReference<List<DomainModeration>>() {})
-                            .stream()
-                            .filter(domainModeration -> mapInstances.containsKey(domainModeration.getDomain()))
-                            .collect(Collectors.toList());
-
+                    domainsModeration = objectMapper.readValue(response.body(), new TypeReference<List<DomainModeration>>() {});
                 } catch (Exception e) {
                     LOGGER.severe("Error processing blocks for " + instance.getName());
                     LOGGER.severe("Response: " + response.body());
@@ -151,6 +184,8 @@ public class Main {
                 LOGGER.severe("Error fetching blocks for " + instance.getName());
                 e.printStackTrace();
             }
+        } {
+            LOGGER.info(number+ "/"+mapInstances.size()+" - Instance is dead or down: " + instance.getName());
         }
 
         if(domainsModeration.isEmpty()) {
