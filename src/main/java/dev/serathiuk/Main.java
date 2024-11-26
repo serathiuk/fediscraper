@@ -1,6 +1,5 @@
 package dev.serathiuk;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.csv.CSVFormat;
@@ -22,15 +21,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 public class Main {
 
     private static final Logger LOGGER = Logger.getLogger(Main.class.getName());
-
-    private static final ReentrantLock LOCK = new ReentrantLock();
 
     private static final  ObjectMapper objectMapper = new ObjectMapper();
 
@@ -54,7 +50,7 @@ public class Main {
         var csvInstances = CSVFormat.DEFAULT.builder()
                 .setHeader("instance", "added_at", "updated_at", "checked_at", "uptimwe", "up", "dead", "version", "ipv6",
                         "https_score", "https_rank", "obs_score", "obs_rank", "users", "statuses", "connections", "open_registrations",
-                        "topic", "up", "dead", "language", "prohibited_content", "category", "moderated_domain", "moderation_severitiy", "moderation_comment")
+                        "topic", "up", "dead", "language", "prohibited_content", "category", "suspends", "silences", "comment")
                 .build();
 
         var instancesList = new ArrayList<Instance>();
@@ -108,8 +104,6 @@ public class Main {
 
                 var instances = objectMapper.readValue(response.body(), Instances.class);
                 instancesList.addAll(instances.getInstances());
-
-
 
                 nextId = instances.getPagination().getNextId();
             } while (nextId != null && !nextId.isEmpty());
@@ -170,7 +164,10 @@ public class Main {
                 }
 
                 try {
-                    domainsModeration = objectMapper.readValue(response.body(), new TypeReference<List<DomainModeration>>() {});
+                    domainsModeration = objectMapper.readValue(response.body(), new TypeReference<List<DomainModeration>>() {})
+                            .stream()
+                            .filter(d -> d.getDomain() != null && !d.getDomain().trim().isEmpty())
+                            .toList();
                 } catch (Exception e) {
                     LOGGER.severe("Error processing blocks for " + instance.getName());
                     LOGGER.severe("Response: " + response.body());
@@ -197,24 +194,28 @@ public class Main {
             domainsModeration = List.of(domain);
         }
 
-        LOCK.lock();
-        try {
-            for (var language : languages) {
-                for (var prohibitedContent : prohibitedContents) {
-                    for (var category : categories) {
-                        for (var domainModeration : domainsModeration) {
-                            printerInstances.printRecord(instance.getName(), instance.getAddedAt(), instance.getUpdatedAt(), instance.getCheckedAt(),
-                                    instance.getUptime(), instance.isUp(), instance.isDead(), instance.getVersion(), instance.isIpv6(), instance.getHttpsScore(),
-                                    instance.getHttpsRank(), instance.getObsScore(), instance.getObsRank(), instance.getUsers(), instance.getStatuses(),
-                                    instance.getConnections(), instance.isOpenRegistrations(), instance.getInfo().getTopic(), instance.isUp(),
-                                    instance.isDead(), language, prohibitedContent, category,
-                                    domainModeration.getDomain(), domainModeration.getSeverity(), domainModeration.getComment());
+        for (var language : languages) {
+            for (var prohibitedContent : prohibitedContents) {
+                for (var category : categories) {
+                    for (var domainModeration : domainsModeration) {
+                        var blocks = "";
+                        var silences = "";
+
+                        if("suspend".equalsIgnoreCase(domainModeration.getSeverity())) {
+                            blocks = domainModeration.getDomain();
+                        } else {
+                            silences = domainModeration.getDomain();
                         }
+
+                        printerInstances.printRecord(instance.getName(), instance.getAddedAt(), instance.getUpdatedAt(), instance.getCheckedAt(),
+                                instance.getUptime(), instance.isUp(), instance.isDead(), instance.getVersion(), instance.isIpv6(), instance.getHttpsScore(),
+                                instance.getHttpsRank(), instance.getObsScore(), instance.getObsRank(), instance.getUsers(), instance.getStatuses(),
+                                instance.getConnections(), instance.isOpenRegistrations(), instance.getInfo().getTopic(), instance.isUp(),
+                                instance.isDead(), language, prohibitedContent, category,
+                                blocks, silences, instance, domainModeration.getComment());
                     }
                 }
             }
-        } finally {
-            LOCK.unlock();
         }
     }
 }
