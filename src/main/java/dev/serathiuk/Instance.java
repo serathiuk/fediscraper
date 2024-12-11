@@ -1,10 +1,12 @@
 package dev.serathiuk;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.io.IOException;
 import java.util.Properties;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Instance {
 
     @JsonProperty("id")
@@ -64,20 +66,8 @@ public class Instance {
     @JsonProperty("info")
     private Info info;
 
-    @JsonProperty("thumbnail")
-    private String thumbnail;
-
-    @JsonProperty("thumbnail_proxy")
-    private String thumbnailProxy;
-
     @JsonProperty("active_users")
     private int activeUsers;
-
-    @JsonProperty("email")
-    private String email;
-
-    @JsonProperty("admin")
-    private String admin;
 
     public static void main(String[] args) throws IOException {
         ;
@@ -236,44 +226,12 @@ public class Instance {
         this.info = info;
     }
 
-    public String getThumbnail() {
-        return thumbnail;
-    }
-
-    public void setThumbnail(String thumbnail) {
-        this.thumbnail = thumbnail;
-    }
-
-    public String getThumbnailProxy() {
-        return thumbnailProxy;
-    }
-
-    public void setThumbnailProxy(String thumbnailProxy) {
-        this.thumbnailProxy = thumbnailProxy;
-    }
-
     public int getActiveUsers() {
         return activeUsers;
     }
 
     public void setActiveUsers(int activeUsers) {
         this.activeUsers = activeUsers;
-    }
-
-    public String getEmail() {
-        return email;
-    }
-
-    public void setEmail(String email) {
-        this.email = email;
-    }
-
-    public String getAdmin() {
-        return admin;
-    }
-
-    public void setAdmin(String admin) {
-        this.admin = admin;
     }
 }
 

@@ -72,12 +72,9 @@ public class Main {
 
         var info = new Info();
         info.setLanguages(List.of("en", "pt", "es"));
-        info.setFederatesWith("all");
         info.setCategories(List.of("general", "social", "tech"));
         info.setProhibitedContent(List.of("nudity", "violence", "hate speech"));
         info.setTopic("General discussion");
-        info.setFullDescription("Threads is a general discussion instance.");
-        info.setShortDescription("General discussion instance.");
         threads.setInfo(info);
         instancesList.add(threads);
 
@@ -190,7 +187,6 @@ public class Main {
             domain.setDomain("none");
             domain.setSeverity("unknown");
             domain.setComment("none");
-            domain.setSeverity_ex("unknown");
             domainsModeration = List.of(domain);
         }
 
