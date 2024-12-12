@@ -20,17 +20,32 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 public class Main {
+
+    private static final String BLANK = "";
+    private static final String UNKNOWN = "unknown";
+    private static final List<String> UNKNOWN_LIST = List.of(UNKNOWN);
+    private static final String NONE = "none";
+    private static final List<String> NONE_LIST = List.of(NONE);
+    private static final List<DomainModeration> BLANK_DOMAIN_MODERATION;
+    private static final String SUSPEND_STR = "suspend";;
+
+    static {
+        var domain = new DomainModeration();
+        domain.setDomain(NONE);
+        domain.setSeverity(UNKNOWN);
+        domain.setComment(NONE);
+        BLANK_DOMAIN_MODERATION = List.of(domain);
+    }
 
     private static final Logger LOGGER = Logger.getLogger(Main.class.getName());
 
     private static final  ObjectMapper objectMapper = new ObjectMapper();
-
-    private static AtomicInteger counter = new AtomicInteger(0);
 
     public static void main(String[] args) throws IOException {
         var properties = new Properties();
@@ -54,29 +69,6 @@ public class Main {
                 .build();
 
         var instancesList = new ArrayList<Instance>();
-
-        var threads = new Instance();
-        threads.setId("1111111");
-        threads.setName("threads.net");
-        threads.setUp(true);
-        threads.setDead(false);
-        threads.setOpenRegistrations(true);
-        threads.setHttpsScore(100);
-        threads.setHttpsRank("A+");
-        threads.setObsScore(100);
-        threads.setObsRank("A+");
-        threads.setUsers("200000000");
-        threads.setStatuses("200000000");
-        threads.setConnections("200000000");
-        threads.setVersion("1.0.0");
-
-        var info = new Info();
-        info.setLanguages(List.of("en", "pt", "es"));
-        info.setCategories(List.of("general", "social", "tech"));
-        info.setProhibitedContent(List.of("nudity", "violence", "hate speech"));
-        info.setTopic("General discussion");
-        threads.setInfo(info);
-        instancesList.add(threads);
 
         try(final var httpClient = HttpClient.newHttpClient();
             final var printerInstances = new CSVPrinter(swInstance, csvInstances)) {
@@ -121,23 +113,25 @@ public class Main {
         Map<String, Instance> mapInstances = instances.parallelStream()
                         .collect(Collectors.toMap(Instance::getName, instance -> instance));
 
-        instances.parallelStream().forEach(instance -> {
-
-            try {
-                processInstance(printerInstances, instance, mapInstances);
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        });
+        try(var executor = Executors.newFixedThreadPool(16)) {
+            IntStream.range(0, instances.size()).forEach(i -> {
+                executor.submit(() -> {
+                    try {
+                        processInstance(i, printerInstances, instances.get(i), mapInstances);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                });
+            });
+        }
     }
 
-    private static void processInstance(CSVPrinter printerInstances, Instance instance, Map<String, Instance> mapInstances) throws IOException {
-        var languages = instance.getInfo().getLanguages() != null ? instance.getInfo().getLanguages() : List.of("unknown");
-        var prohibitedContents = instance.getInfo().getProhibitedContent() != null ? instance.getInfo().getProhibitedContent() : List.of("unknown");
-        var categories = instance.getInfo().getCategories() != null ? instance.getInfo().getCategories() : List.of("unknown");
-        List<DomainModeration> domainsModeration = List.of();
+    private static void processInstance(int number, CSVPrinter printerInstances, Instance instance, Map<String, Instance> mapInstances) throws IOException {
+        var languages = instance.getInfo().getLanguages() != null ? instance.getInfo().getLanguages() : UNKNOWN_LIST;
+        var prohibitedContents = instance.getInfo().getProhibitedContent() != null ? instance.getInfo().getProhibitedContent() : UNKNOWN_LIST;
+        var categories = instance.getInfo().getCategories() != null ? instance.getInfo().getCategories() : UNKNOWN_LIST;
+        List<DomainModeration> domainsModeration = null;
 
-        var number = counter.incrementAndGet();
         if(number % 1000 == 0) {
             System.out.println("Running GC...");
             System.gc();
@@ -178,26 +172,24 @@ public class Main {
                 LOGGER.severe("Error fetching blocks for " + instance.getName());
                 e.printStackTrace();
             }
-        } {
+        } else {
             LOGGER.info(number+ "/"+mapInstances.size()+" - Instance is dead or down: " + instance.getName());
         }
 
-        if(domainsModeration.isEmpty()) {
-            var domain = new DomainModeration();
-            domain.setDomain("none");
-            domain.setSeverity("unknown");
-            domain.setComment("none");
-            domainsModeration = List.of(domain);
+        if(domainsModeration == null || domainsModeration.isEmpty()) {
+            domainsModeration = BLANK_DOMAIN_MODERATION;
         }
 
+        var blocks = BLANK;
+        var silences = BLANK;
         for (var language : languages) {
             for (var prohibitedContent : prohibitedContents) {
                 for (var category : categories) {
                     for (var domainModeration : domainsModeration) {
-                        var blocks = "";
-                        var silences = "";
+                        blocks = BLANK;
+                        silences = BLANK;
 
-                        if("suspend".equalsIgnoreCase(domainModeration.getSeverity())) {
+                        if(SUSPEND_STR.equalsIgnoreCase(domainModeration.getSeverity())) {
                             blocks = domainModeration.getDomain();
                         } else {
                             silences = domainModeration.getDomain();
