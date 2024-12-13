@@ -16,15 +16,10 @@ import java.net.http.HttpTimeoutException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 public class Main {
 
@@ -136,7 +131,9 @@ public class Main {
         List<DomainModeration> domainsModeration = null;
 
         if(!instance.isDead()) {
-            try (final var httpClient = HttpClient.newHttpClient();) {
+            try (final var httpClient = HttpClient.newBuilder()
+                    .followRedirects(HttpClient.Redirect.ALWAYS)
+                    .build();) {
                 var req = HttpRequest.newBuilder()
                         .uri(new URI("https://" + instance.getName() + "/api/v1/instance/domain_blocks"))
                         .GET()
