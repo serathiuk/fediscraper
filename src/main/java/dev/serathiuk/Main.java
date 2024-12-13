@@ -7,7 +7,6 @@ import org.apache.commons.csv.CSVPrinter;
 
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.StringWriter;
 import java.net.ConnectException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -30,10 +29,7 @@ import java.util.stream.IntStream;
 public class Main {
 
     private static final String BLANK = "";
-    private static final String UNKNOWN = "unknown";
-    private static final List<String> UNKNOWN_LIST = List.of(UNKNOWN);
-    private static final String NONE = "none";
-    private static final List<String> NONE_LIST = List.of(NONE);
+    private static final List<String> UNKNOWN_LIST = List.of(BLANK);
     private static final List<DomainModeration> BLANK_DOMAIN_MODERATION;
     private static final String SUSPEND_STR = "suspend";;
 
@@ -41,9 +37,9 @@ public class Main {
 
     static {
         var domain = new DomainModeration();
-        domain.setDomain(NONE);
-        domain.setSeverity(UNKNOWN);
-        domain.setComment(NONE);
+        domain.setDomain(BLANK);
+        domain.setSeverity(BLANK);
+        domain.setComment(BLANK);
         BLANK_DOMAIN_MODERATION = List.of(domain);
     }
 
@@ -129,9 +125,13 @@ public class Main {
     }
 
     private static void processInstance(int number, CSVPrinter printerInstances, Instance instance, Map<String, Instance> mapInstances) throws IOException {
-        var languages = instance.getInfo().getLanguages() != null ? instance.getInfo().getLanguages() : UNKNOWN_LIST;
-        var prohibitedContents = instance.getInfo().getProhibitedContent() != null ? instance.getInfo().getProhibitedContent() : UNKNOWN_LIST;
-        var categories = instance.getInfo().getCategories() != null ? instance.getInfo().getCategories() : UNKNOWN_LIST;
+        var languages_aux = instance.getInfo().getLanguages();
+        var prohibitedContents_aux = instance.getInfo().getProhibitedContent();
+        var categories_aux = instance.getInfo().getCategories();
+
+        var languages = languages_aux != null && !languages_aux.isEmpty() ? languages_aux : UNKNOWN_LIST;
+        var prohibitedContents = prohibitedContents_aux != null && !prohibitedContents_aux.isEmpty() ? prohibitedContents_aux : UNKNOWN_LIST;
+        var categories = categories_aux != null && !categories_aux.isEmpty() ? categories_aux : UNKNOWN_LIST;
         List<DomainModeration> domainsModeration = null;
 
         if(number % 1000 == 0) {
