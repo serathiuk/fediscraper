@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVPrinter;
 
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.net.ConnectException;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -34,6 +36,8 @@ public class Main {
     private static final List<String> NONE_LIST = List.of(NONE);
     private static final List<DomainModeration> BLANK_DOMAIN_MODERATION;
     private static final String SUSPEND_STR = "suspend";;
+
+    private static final ReentrantLock lock = new ReentrantLock();
 
     static {
         var domain = new DomainModeration();
@@ -60,17 +64,18 @@ public class Main {
         Files.createDirectories(path);
         Files.deleteIfExists(path.resolve("full_data.csv"));
 
-        var swInstance = new StringWriter();
+
 
         var csvInstances = CSVFormat.DEFAULT.builder()
                 .setHeader("instance", "added_at", "updated_at", "checked_at", "uptimwe", "up", "dead", "version", "ipv6",
                         "https_score", "https_rank", "obs_score", "obs_rank", "users", "statuses", "connections", "open_registrations",
-                        "topic", "up", "dead", "language", "prohibited_content", "category", "suspends", "silences", "comment")
+                        "topic", "language", "prohibited_content", "category", "suspends", "silences", "comment")
                 .build();
 
         var instancesList = new ArrayList<Instance>();
 
         try(final var httpClient = HttpClient.newHttpClient();
+            final var swInstance = new FileWriter(path.resolve("full_data.csv").toFile());
             final var printerInstances = new CSVPrinter(swInstance, csvInstances)) {
 
             String nextId = null;
@@ -102,9 +107,6 @@ public class Main {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
-
-        LOGGER.info("Writing CSV files...");
-        Files.write(path.resolve("full_data.csv"), swInstance.toString().getBytes());
     }
 
     private static void writeCSV(List<Instance> instances, CSVPrinter printerInstances) throws IOException {
@@ -195,12 +197,19 @@ public class Main {
                             silences = domainModeration.getDomain();
                         }
 
-                        printerInstances.printRecord(instance.getName(), instance.getAddedAt(), instance.getUpdatedAt(), instance.getCheckedAt(),
-                                instance.getUptime(), instance.isUp(), instance.isDead(), instance.getVersion(), instance.isIpv6(), instance.getHttpsScore(),
-                                instance.getHttpsRank(), instance.getObsScore(), instance.getObsRank(), instance.getUsers(), instance.getStatuses(),
-                                instance.getConnections(), instance.isOpenRegistrations(), instance.getInfo().getTopic(), instance.isUp(),
-                                instance.isDead(), language, prohibitedContent, category,
-                                blocks, silences, instance, domainModeration.getComment());
+
+                        lock.lock();
+                        try {
+
+                            printerInstances.printRecord(instance.getName(), instance.getAddedAt(), instance.getUpdatedAt(), instance.getCheckedAt(),
+                                    instance.getUptime(), instance.isUp(), instance.isDead(), instance.getVersion(), instance.isIpv6(), instance.getHttpsScore(),
+                                    instance.getHttpsRank(), instance.getObsScore(), instance.getObsRank(), instance.getUsers(), instance.getStatuses(),
+                                    instance.getConnections(), instance.isOpenRegistrations(), instance.getInfo().getTopic(), language, prohibitedContent, category,
+                                    blocks, silences, domainModeration.getComment());
+                        } finally {
+                            lock.unlock();
+                        }
+
                     }
                 }
             }
