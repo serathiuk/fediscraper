@@ -34,6 +34,13 @@ public class Main {
     private static final String SUSPEND_STR = "suspend";;
 
     private static final ReentrantLock lock = new ReentrantLock();
+    public static final TypeReference<List<DomainModeration>> VALUE_TYPE_REF = new TypeReference<>() {
+    };
+
+    public static final Duration DURATION = Duration.ofSeconds(5);
+    public static final HttpResponse.BodyHandler<String> RESPONSE_BODY_HANDLER = HttpResponse.BodyHandlers.ofString();
+    public static final String AUTHORIZATION = "Authorization";
+    public static final String BEARER = "Bearer ";
 
     static {
         var domain = new DomainModeration();
@@ -68,15 +75,13 @@ public class Main {
                         "topic", "language", "prohibited_content", "category", "suspends", "silences", "comment")
                 .build();
 
-        var instancesList = new ArrayList<Instance>();
-
         try(final var httpClient = HttpClient.newHttpClient();
             final var swInstance = new FileWriter(path.resolve("full_data.csv").toFile());
             final var printerInstances = new CSVPrinter(swInstance, csvInstances)) {
 
             String nextId = null;
             do {
-                String url = "https://instances.social/api/1.0/instances/list?include_closed=true&include_dead=true&min_users=1&count=5000";
+                String url = "https://instances.social/api/1.0/instances/list?include_closed=true&include_dead=false&min_users=1&count=1000";
 
                 if(nextId != null && !nextId.isEmpty()) {
                     url += "&min_id=" + nextId;
@@ -87,19 +92,21 @@ public class Main {
                         .uri(new URI(url))
                         .GET()
                         .timeout(Duration.ofSeconds(10))
-                        .header("Authorization", "Bearer "+key)
+                        .header(AUTHORIZATION, BEARER +key)
                         .build();
 
-                var response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
+                var response = httpClient.send(req, RESPONSE_BODY_HANDLER);
 
                 var instances = objectMapper.readValue(response.body(), Instances.class);
-                instancesList.addAll(instances.getInstances());
+
+                LOGGER.info("Writing CSV files...");
+                writeCSV(instances.getInstances(), printerInstances);
 
                 nextId = instances.getPagination().getNextId();
+
+                swInstance.flush();
             } while (nextId != null && !nextId.isEmpty());
 
-            LOGGER.info("Writing CSV files...");
-            writeCSV(instancesList, printerInstances);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -107,24 +114,18 @@ public class Main {
 
     private static void writeCSV(List<Instance> instances, CSVPrinter printerInstances) throws IOException {
         LOGGER.info("Printing instances...");
+        System.gc();
 
-        Map<String, Instance> mapInstances = instances.parallelStream()
-                        .collect(Collectors.toMap(Instance::getName, instance -> instance));
-
-        try(var executor = Executors.newFixedThreadPool(16)) {
-            IntStream.range(0, instances.size()).forEach(i -> {
-                executor.submit(() -> {
-                    try {
-                        processInstance(i, printerInstances, instances.get(i), mapInstances);
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                });
-            });
-        }
+        instances.parallelStream().forEach(instance -> {
+            try {
+                processInstance(printerInstances, instance);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        });
     }
 
-    private static void processInstance(int number, CSVPrinter printerInstances, Instance instance, Map<String, Instance> mapInstances) throws IOException {
+    private static void processInstance(CSVPrinter printerInstances, Instance instance) throws IOException {
         var languages_aux = instance.getInfo().getLanguages();
         var prohibitedContents_aux = instance.getInfo().getProhibitedContent();
         var categories_aux = instance.getInfo().getCategories();
@@ -134,37 +135,28 @@ public class Main {
         var categories = categories_aux != null && !categories_aux.isEmpty() ? categories_aux : UNKNOWN_LIST;
         List<DomainModeration> domainsModeration = null;
 
-        if(number % 1000 == 0) {
-            System.out.println("Running GC...");
-            System.gc();
-        }
-
-        if(!instance.isDead() && instance.isUp()) {
+        if(!instance.isDead()) {
             try (final var httpClient = HttpClient.newHttpClient();) {
-                LOGGER.info(number+ "/"+mapInstances.size()+" - Searching blocks for " + instance.getName());
-
                 var req = HttpRequest.newBuilder()
                         .uri(new URI("https://" + instance.getName() + "/api/v1/instance/domain_blocks"))
                         .GET()
-                        .timeout(Duration.ofSeconds(3))
+                        .timeout(DURATION)
                         .build();
 
                 var response = httpClient.send(req, HttpResponse.BodyHandlers.ofString());
 
                 if (response.statusCode() >= 400) {
-                    LOGGER.warning("Error fetching blocks for " + instance.getName());
                     return;
                 }
 
                 try {
-                    domainsModeration = objectMapper.readValue(response.body(), new TypeReference<List<DomainModeration>>() {})
+                    domainsModeration = objectMapper.readValue(response.body(), VALUE_TYPE_REF)
                             .stream()
                             .filter(d -> d.getDomain() != null && !d.getDomain().trim().isEmpty())
                             .toList();
                 } catch (Exception e) {
                     LOGGER.severe("Error processing blocks for " + instance.getName());
                     LOGGER.severe("Response: " + response.body());
-                    e.printStackTrace();
                 }
             } catch (ConnectException e) {
                 LOGGER.warning("Connection Refused: " + instance.getName());
@@ -172,10 +164,7 @@ public class Main {
                 LOGGER.warning("Connection Timeout: " + instance.getName());
             } catch (Exception e) {
                 LOGGER.severe("Error fetching blocks for " + instance.getName());
-                e.printStackTrace();
             }
-        } else {
-            LOGGER.info(number+ "/"+mapInstances.size()+" - Instance is dead or down: " + instance.getName());
         }
 
         if(domainsModeration == null || domainsModeration.isEmpty()) {
